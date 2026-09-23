@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#f7f5f0" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>MA & PP Money</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">MA & PP</div>
+        <h1>Household Money</h1>
+      </div>
+      <button id="refreshBtn" class="icon-btn" aria-label="Làm mới">↻</button>
+    </header>
+
+    <main id="app">
+      <section class="view active" id="view-home">
+        <div class="month-row">
+          <button id="prevMonth" class="month-btn">‹</button>
+          <div>
+            <div class="muted">Tổng quan</div>
+            <h2 id="monthLabel">Tháng này</h2>
+          </div>
+          <button id="nextMonth" class="month-btn">›</button>
+        </div>
+
+        <div class="kpi-grid">
+          <article class="card kpi">
+            <span>Thu nhập</span>
+            <strong id="incomeKpi">0 ₫</strong>
+          </article>
+          <article class="card kpi">
+            <span>Chi tiêu</span>
+            <strong id="expenseKpi">0 ₫</strong>
+          </article>
+          <article class="card kpi">
+            <span>Còn lại</span>
+            <strong id="remainingKpi">0 ₫</strong>
+          </article>
+          <article class="card kpi">
+            <span>Tỷ lệ tiết kiệm</span>
+            <strong id="savingKpi">0%</strong>
+          </article>
+        </div>
+
+        <section class="card">
+          <div class="section-head">
+            <h3>Chi theo nhóm</h3>
+            <span class="muted" id="categoryTotal"></span>
+          </div>
+          <div id="categoryBars" class="bar-list">
+            <div class="empty">Chưa có dữ liệu.</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h3>Giao dịch gần đây</h3>
+            <button class="link-btn" data-nav="transactions">Xem tất cả</button>
+          </div>
+          <div id="recentTransactions" class="tx-list">
+            <div class="empty">Đang tải...</div>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-transactions">
+        <div class="section-title-row">
+          <div>
+            <div class="muted">Lịch sử</div>
+            <h2>Giao dịch</h2>
+          </div>
+        </div>
+
+        <div class="filters card">
+          <select id="filterType">
+            <option value="">Tất cả loại</option>
+            <option value="Expense">Chi</option>
+            <option value="Income">Thu</option>
+          </select>
+          <select id="filterOwner">
+            <option value="">Tất cả người</option>
+            <option value="Minh Anh">Minh Anh</option>
+            <option value="PP">PP</option>
+            <option value="Household">Household</option>
+          </select>
+          <select id="filterCategory">
+            <option value="">Tất cả nhóm</option>
+          </select>
+        </div>
+
+        <div id="transactionsList" class="tx-list card">
+          <div class="empty">Đang tải...</div>
+        </div>
+      </section>
+
+      <section class="view" id="view-add">
+        <div class="section-title-row">
+          <div>
+            <div class="muted">Nhập nhanh</div>
+            <h2>Thêm giao dịch</h2>
+          </div>
+        </div>
+
+        <form id="transactionForm" class="card form-card">
+          <div class="segmented">
+            <button type="button" class="seg active" data-type="Expense">Chi</button>
+            <button type="button" class="seg" data-type="Income">Thu</button>
+          </div>
+
+          <label>Số tiền
+            <input id="amount" type="number" inputmode="numeric" placeholder="0" required />
+          </label>
+
+          <div class="quick-amounts">
+            <button type="button" data-amount="100000">100k</button>
+            <button type="button" data-amount="200000">200k</button>
+            <button type="button" data-amount="500000">500k</button>
+            <button type="button" data-amount="1000000">1tr</button>
+          </div>
+
+          <label>Nội dung
+            <input id="description" type="text" placeholder="Ví dụ: Ăn tối, Grab, WinMart..." required />
+          </label>
+
+          <div class="two-col">
+            <label>Ngày
+              <input id="date" type="date" required />
+            </label>
+            <label>Người
+              <select id="owner">
+                <option value="Minh Anh">Minh Anh</option>
+                <option value="PP">PP</option>
+                <option value="Household">Household</option>
+              </select>
+            </label>
+          </div>
+
+          <label>Nhóm
+            <select id="category" required></select>
+          </label>
+
+          <label>Tài khoản
+            <select id="account" required></select>
+          </label>
+
+          <div class="two-col">
+            <label>Loại chi
+              <select id="fixedVariable">
+                <option value="Variable">Variable</option>
+                <option value="Fixed">Fixed</option>
+              </select>
+            </label>
+            <label>Ghi chú
+              <input id="note" type="text" placeholder="Không bắt buộc" />
+            </label>
+          </div>
+
+          <button id="saveBtn" class="primary-btn" type="submit">Lưu giao dịch</button>
+          <div id="formMessage" class="form-message"></div>
+        </form>
+      </section>
+
+      <section class="view" id="view-recurring">
+        <div class="section-title-row">
+          <div>
+            <div class="muted">Hàng tháng</div>
+            <h2>Recurring</h2>
+          </div>
+        </div>
+        <div id="recurringList" class="card list-stack">
+          <div class="empty">Đang tải...</div>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="section-title-row">
+          <div>
+            <div class="muted">Thiết lập</div>
+            <h2>Tài khoản & danh mục</h2>
+          </div>
+        </div>
+
+        <section class="card">
+          <h3>Tài khoản</h3>
+          <div id="accountsList" class="list-stack"></div>
+        </section>
+
+        <section class="card">
+          <h3>Danh mục</h3>
+          <div id="categoriesList" class="chips"></div>
+        </section>
+
+        <section class="card warning-card">
+          <h3>Lưu ý bảo mật</h3>
+          <p>Đây là bản V1 tĩnh trên GitHub Pages. Không lưu mật khẩu ngân hàng, OTP hoặc thông tin đăng nhập trong Google Sheet hay mã nguồn.</p>
+        </section>
+      </section>
+    </main>
+
+    <nav class="bottom-nav">
+      <button class="nav-btn active" data-view="home"><span>⌂</span><small>Home</small></button>
+      <button class="nav-btn" data-view="transactions"><span>≡</span><small>Giao dịch</small></button>
+      <button class="nav-btn add-nav" data-view="add"><span>＋</span><small>Thêm</small></button>
+      <button class="nav-btn" data-view="recurring"><span>↻</span><small>Định kỳ</small></button>
+      <button class="nav-btn" data-view="settings"><span>⚙</span><small>Cài đặt</small></button>
+    </nav>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
