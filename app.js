@@ -10,11 +10,17 @@ const state = {
 };
 
 const money = n => new Intl.NumberFormat("vi-VN", {
-  style: "currency", currency: "VND", maximumFractionDigits: 0
+  style: "currency",
+  currency: "VND",
+  maximumFractionDigits: 0
 }).format(Number(n || 0));
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, m => ({
-  "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"
+  "&":"&amp;",
+  "<":"&lt;",
+  ">":"&gt;",
+  "\"":"&quot;",
+  "'":"&#039;"
 }[m]));
 
 function toDate(v) {
@@ -25,77 +31,135 @@ function toDate(v) {
 
 function sameMonth(dateValue, refDate) {
   const d = toDate(dateValue);
-  return d && d.getMonth() === refDate.getMonth() && d.getFullYear() === refDate.getFullYear();
+  return d &&
+    d.getMonth() === refDate.getMonth() &&
+    d.getFullYear() === refDate.getFullYear();
 }
 
 function jsonp(params = {}) {
   return new Promise((resolve, reject) => {
-    const callbackName = "__mapp_cb_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+    const callbackName =
+      "__mapp_cb_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+
     const script = document.createElement("script");
-    const query = new URLSearchParams({ ...params, callback: callbackName });
-    const timeout = setTimeout(() => { cleanup(); reject(new Error("API timeout")); }, 15000);
 
-    function cleanup() {
-      clearTimeout(timeout);
+    const query = new URLSearchParams({
+      ...params,
+      callback: callbackName,
+      _: Date.now()
+    });
+
+    let finished = false;
+
+    const timeout = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+
+      // Keep a harmless callback temporarily so a late Apps Script response
+      // does not throw "__mapp_cb_x is not defined".
+      window[callbackName] = function() {};
+
       if (script.parentNode) script.parentNode.removeChild(script);
+
+      setTimeout(() => {
+        try { delete window[callbackName]; } catch (_) {}
+      }, 60000);
+
+      reject(new Error("API timeout"));
+    }, 45000);
+
+    window[callbackName] = data => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+
+      if (script.parentNode) script.parentNode.removeChild(script);
+
       try { delete window[callbackName]; } catch (_) {}
-    }
 
-    window[callbackName] = data => { cleanup(); resolve(data); };
-    script.onerror = () => { cleanup(); reject(new Error("Không kết nối được Apps Script")); };
+      resolve(data);
+    };
+
+    script.onerror = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+
+      if (script.parentNode) script.parentNode.removeChild(script);
+
+      try { delete window[callbackName]; } catch (_) {}
+
+      reject(new Error("Không kết nối được Apps Script"));
+    };
+
     script.src = API_URL + "?" + query.toString();
-    document.body.appendChild(script);
+    document.head.appendChild(script);
   });
-}
-
-async function getAction(action) {
-  return jsonp({ action });
 }
 
 async function mutate(action, payload = {}) {
   const params = { action };
-  if (action === "deleteTransaction") params.transactionId = payload.transactionId || "";
-  else params.payload = JSON.stringify(payload);
+
+  if (action === "deleteTransaction") {
+    params.transactionId = payload.transactionId || "";
+  } else {
+    params.payload = JSON.stringify(payload);
+  }
+
   return jsonp(params);
 }
 
 async function loadAll() {
   try {
-    const [transactions, categories, accounts, recurring] = await Promise.all([
-      getAction("transactions"),
-      getAction("categories"),
-      getAction("accounts"),
-      getAction("recurring")
-    ]);
+    const data = await jsonp({ action: "bootstrap" });
 
-    state.transactions = Array.isArray(transactions) ? transactions : [];
-    state.categories = Array.isArray(categories) ? categories.filter(x => x.Active !== "No") : [];
-    state.accounts = Array.isArray(accounts) ? accounts.filter(x => x.Active !== "No") : [];
-    state.recurring = Array.isArray(recurring) ? recurring.filter(x => x.Active !== "No") : [];
+    if (!data || data.success === false) {
+      throw new Error(data?.error || "Không nhận được dữ liệu");
+    }
+
+    state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
+    state.categories = Array.isArray(data.categories)
+      ? data.categories.filter(x => x.Active !== "No")
+      : [];
+    state.accounts = Array.isArray(data.accounts)
+      ? data.accounts.filter(x => x.Active !== "No")
+      : [];
+    state.recurring = Array.isArray(data.recurring)
+      ? data.recurring.filter(x => x.Active !== "No")
+      : [];
 
     hydrateSelects();
     renderAll();
+
   } catch (err) {
     console.error(err);
+
     document.getElementById("recentTransactions").innerHTML =
-      `<div class="empty">Không tải được dữ liệu. Hãy kiểm tra Apps Script.</div>`;
+      `<div class="empty">Không tải được dữ liệu: ${esc(err.message)}</div>`;
   }
 }
 
 function hydrateSelects() {
   const typeCats = state.categories.filter(c => c.Type === state.txType);
+
   document.getElementById("category").innerHTML = typeCats
-    .map(c => `<option value="${esc(c.Category)}">${esc(c.Icon || "")} ${esc(c.Category)}</option>`)
+    .map(c =>
+      `<option value="${esc(c.Category)}">${esc(c.Icon || "")} ${esc(c.Category)}</option>`
+    )
     .join("");
 
   document.getElementById("filterCategory").innerHTML =
     `<option value="">Tất cả nhóm</option>` +
-    state.categories.map(c =>
-      `<option value="${esc(c.Category)}">${esc(c.Icon || "")} ${esc(c.Category)}</option>`
-    ).join("");
+    state.categories
+      .map(c =>
+        `<option value="${esc(c.Category)}">${esc(c.Icon || "")} ${esc(c.Category)}</option>`
+      )
+      .join("");
 
   document.getElementById("account").innerHTML = state.accounts
-    .map(a => `<option value="${esc(a["Account Name"])}">${esc(a["Account Name"])}</option>`)
+    .map(a =>
+      `<option value="${esc(a["Account Name"])}">${esc(a["Account Name"])}</option>`
+    )
     .join("");
 }
 
@@ -109,14 +173,19 @@ function getMonthTransactions() {
 
 function renderDashboard() {
   const txs = getMonthTransactions();
-  let income = 0, expense = 0;
+
+  let income = 0;
+  let expense = 0;
   const cats = {};
 
   txs.forEach(t => {
     const amount = Number(t.Amount || 0);
+
     if (t.Type === "Income") income += amount;
+
     if (t.Type === "Expense") {
       expense += amount;
+
       const cat = t.Category || "Other Expense";
       cats[cat] = (cats[cat] || 0) + amount;
     }
@@ -129,39 +198,78 @@ function renderDashboard() {
   document.getElementById("expenseKpi").textContent = money(expense);
   document.getElementById("remainingKpi").textContent = money(remaining);
   document.getElementById("savingKpi").textContent = `${saving.toFixed(1)}%`;
+
   document.getElementById("monthLabel").textContent =
-    new Intl.DateTimeFormat("vi-VN", { month:"long", year:"numeric" }).format(state.selectedDate);
+    new Intl.DateTimeFormat("vi-VN", {
+      month: "long",
+      year: "numeric"
+    }).format(state.selectedDate);
 
-  const sortedCats = Object.entries(cats).sort((a,b) => b[1]-a[1]);
+  const sortedCats = Object.entries(cats).sort((a,b) => b[1] - a[1]);
   const max = sortedCats[0]?.[1] || 1;
-  document.getElementById("categoryTotal").textContent = expense ? money(expense) : "";
 
-  document.getElementById("categoryBars").innerHTML = sortedCats.length
-    ? sortedCats.map(([name,value]) => `
-      <div class="bar-row">
-        <div>${esc(name)}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, value/max*100)}%"></div></div>
-        <div>${money(value)}</div>
-      </div>`).join("")
-    : `<div class="empty">Chưa có chi tiêu trong tháng này.</div>`;
+  document.getElementById("categoryTotal").textContent =
+    expense ? money(expense) : "";
 
-  const recent = [...txs].sort((a,b)=>new Date(b.Date)-new Date(a.Date)).slice(0,5);
-  document.getElementById("recentTransactions").innerHTML = renderTxItems(recent);
+  document.getElementById("categoryBars").innerHTML =
+    sortedCats.length
+      ? sortedCats.map(([name,value]) => `
+          <div class="bar-row">
+            <div>${esc(name)}</div>
+            <div class="bar-track">
+              <div class="bar-fill"
+                style="width:${Math.max(4, value/max*100)}%">
+              </div>
+            </div>
+            <div>${money(value)}</div>
+          </div>
+        `).join("")
+      : `<div class="empty">Chưa có chi tiêu trong tháng này.</div>`;
+
+  const recent = [...txs]
+    .sort((a,b) => new Date(b.Date) - new Date(a.Date))
+    .slice(0,5);
+
+  document.getElementById("recentTransactions").innerHTML =
+    renderTxItems(recent);
 }
 
 function renderTxItems(txs) {
-  if (!txs.length) return `<div class="empty">Chưa có giao dịch.</div>`;
+  if (!txs.length) {
+    return `<div class="empty">Chưa có giao dịch.</div>`;
+  }
+
   return txs.map(t => {
     const d = toDate(t.Date);
-    const ds = d ? new Intl.DateTimeFormat("vi-VN", {day:"2-digit",month:"2-digit"}).format(d) : "";
+
+    const ds = d
+      ? new Intl.DateTimeFormat("vi-VN", {
+          day: "2-digit",
+          month: "2-digit"
+        }).format(d)
+      : "";
+
     const isIncome = t.Type === "Income";
-    return `<div class="tx-item">
-      <div>
-        <div class="tx-title">${esc(t.Description || t.Merchant || t.Category || "Giao dịch")}</div>
-        <div class="tx-meta">${ds} · ${esc(t.Category || "")} · ${esc(t.Account || "")} · ${esc(t.Owner || "")}</div>
+
+    return `
+      <div class="tx-item">
+        <div>
+          <div class="tx-title">
+            ${esc(t.Description || t.Merchant || t.Category || "Giao dịch")}
+          </div>
+          <div class="tx-meta">
+            ${ds} ·
+            ${esc(t.Category || "")} ·
+            ${esc(t.Account || "")} ·
+            ${esc(t.Owner || "")}
+          </div>
+        </div>
+
+        <div class="amount ${isIncome ? "income" : "expense"}">
+          ${isIncome ? "+" : "-"}${money(t.Amount)}
+        </div>
       </div>
-      <div class="amount ${isIncome ? "income" : "expense"}">${isIncome ? "+" : "-"}${money(t.Amount)}</div>
-    </div>`;
+    `;
   }).join("");
 }
 
@@ -169,39 +277,63 @@ function renderTransactions() {
   const type = document.getElementById("filterType").value;
   const owner = document.getElementById("filterOwner").value;
   const category = document.getElementById("filterCategory").value;
+
   let txs = getMonthTransactions().filter(t =>
     (!type || t.Type === type) &&
     (!owner || t.Owner === owner) &&
     (!category || t.Category === category)
   );
-  txs.sort((a,b)=>new Date(b.Date)-new Date(a.Date));
-  document.getElementById("transactionsList").innerHTML = renderTxItems(txs);
+
+  txs.sort((a,b) => new Date(b.Date) - new Date(a.Date));
+
+  document.getElementById("transactionsList").innerHTML =
+    renderTxItems(txs);
 }
 
 function renderRecurring() {
   const el = document.getElementById("recurringList");
-  el.innerHTML = state.recurring.length ? state.recurring.map(r => `
-    <div class="list-row">
-      <div>
-        <div class="list-title">${esc(r.Name)}</div>
-        <div class="list-sub">${esc(r.Type)} · Ngày ${esc(r.Day_of_Month || "")} · ${esc(r.Amount_Mode || "")}</div>
-      </div>
-      <strong>${r.Amount ? money(r.Amount) : "Chưa nhập"}</strong>
-    </div>`).join("") : `<div class="empty">Chưa có khoản định kỳ.</div>`;
+
+  el.innerHTML = state.recurring.length
+    ? state.recurring.map(r => `
+        <div class="list-row">
+          <div>
+            <div class="list-title">${esc(r.Name)}</div>
+            <div class="list-sub">
+              ${esc(r.Type)} ·
+              Ngày ${esc(r.Day_of_Month || "")} ·
+              ${esc(r.Amount_Mode || "")}
+            </div>
+          </div>
+
+          <strong>
+            ${r.Amount ? money(r.Amount) : "Chưa nhập"}
+          </strong>
+        </div>
+      `).join("")
+    : `<div class="empty">Chưa có khoản định kỳ.</div>`;
 }
 
 function renderSettings() {
-  document.getElementById("accountsList").innerHTML = state.accounts.map(a => `
-    <div class="list-row">
-      <div>
-        <div class="list-title">${esc(a["Account Name"])}</div>
-        <div class="list-sub">${esc(a.Owner)} · ${esc(a["Account Type"])} · ${esc(a["Auto Method"])}</div>
+  document.getElementById("accountsList").innerHTML =
+    state.accounts.map(a => `
+      <div class="list-row">
+        <div>
+          <div class="list-title">${esc(a["Account Name"])}</div>
+          <div class="list-sub">
+            ${esc(a.Owner)} ·
+            ${esc(a["Account Type"])} ·
+            ${esc(a["Auto Method"])}
+          </div>
+        </div>
       </div>
-    </div>`).join("");
+    `).join("");
 
-  document.getElementById("categoriesList").innerHTML = state.categories.map(c =>
-    `<span class="chip">${esc(c.Icon || "")} ${esc(c.Category)}</span>`
-  ).join("");
+  document.getElementById("categoriesList").innerHTML =
+    state.categories.map(c =>
+      `<span class="chip">
+        ${esc(c.Icon || "")} ${esc(c.Category)}
+      </span>`
+    ).join("");
 }
 
 function renderAll() {
@@ -212,84 +344,149 @@ function renderAll() {
 }
 
 function navigate(view) {
-  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-  document.getElementById(`view-${view}`).classList.add("active");
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === view));
-  window.scrollTo({top:0,behavior:"smooth"});
+  document.querySelectorAll(".view")
+    .forEach(v => v.classList.remove("active"));
+
+  document.getElementById(`view-${view}`)
+    .classList.add("active");
+
+  document.querySelectorAll(".nav-btn")
+    .forEach(b =>
+      b.classList.toggle("active", b.dataset.view === view)
+    );
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
 }
 
-document.querySelectorAll(".nav-btn").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.view)));
-document.querySelectorAll("[data-nav]").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.nav)));
+document.querySelectorAll(".nav-btn")
+  .forEach(btn =>
+    btn.addEventListener("click", () =>
+      navigate(btn.dataset.view)
+    )
+  );
 
-document.getElementById("prevMonth").addEventListener("click", () => {
-  state.selectedDate = new Date(state.selectedDate.getFullYear(), state.selectedDate.getMonth()-1, 1);
-  renderAll();
-});
-document.getElementById("nextMonth").addEventListener("click", () => {
-  state.selectedDate = new Date(state.selectedDate.getFullYear(), state.selectedDate.getMonth()+1, 1);
-  renderAll();
-});
-document.getElementById("refreshBtn").addEventListener("click", loadAll);
+document.querySelectorAll("[data-nav]")
+  .forEach(btn =>
+    btn.addEventListener("click", () =>
+      navigate(btn.dataset.nav)
+    )
+  );
 
-["filterType","filterOwner","filterCategory"].forEach(id =>
-  document.getElementById(id).addEventListener("change", renderTransactions)
-);
+document.getElementById("prevMonth")
+  .addEventListener("click", () => {
+    state.selectedDate = new Date(
+      state.selectedDate.getFullYear(),
+      state.selectedDate.getMonth() - 1,
+      1
+    );
 
-document.querySelectorAll(".seg").forEach(btn => btn.addEventListener("click", () => {
-  state.txType = btn.dataset.type;
-  document.querySelectorAll(".seg").forEach(x => x.classList.remove("active"));
-  btn.classList.add("active");
-  hydrateSelects();
-}));
+    renderAll();
+  });
 
-document.querySelectorAll(".quick-amounts button").forEach(btn => btn.addEventListener("click", () => {
-  document.getElementById("amount").value = btn.dataset.amount;
-}));
+document.getElementById("nextMonth")
+  .addEventListener("click", () => {
+    state.selectedDate = new Date(
+      state.selectedDate.getFullYear(),
+      state.selectedDate.getMonth() + 1,
+      1
+    );
 
-document.getElementById("date").value = new Date().toISOString().slice(0,10);
+    renderAll();
+  });
 
-document.getElementById("transactionForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  const saveBtn = document.getElementById("saveBtn");
-  const msg = document.getElementById("formMessage");
+document.getElementById("refreshBtn")
+  .addEventListener("click", loadAll);
 
-  saveBtn.disabled = true;
-  saveBtn.textContent = "Đang lưu...";
-  msg.textContent = "";
+["filterType","filterOwner","filterCategory"]
+  .forEach(id =>
+    document.getElementById(id)
+      .addEventListener("change", renderTransactions)
+  );
 
-  const transaction = {
-    Date: document.getElementById("date").value,
-    Type: state.txType,
-    Amount: Number(document.getElementById("amount").value || 0),
-    Description: document.getElementById("description").value.trim(),
-    Merchant: "",
-    Category: document.getElementById("category").value,
-    Account: document.getElementById("account").value,
-    Owner: document.getElementById("owner").value,
-    "Fixed/Variable": document.getElementById("fixedVariable").value,
-    Source: "Manual",
-    Status: "Confirmed",
-    Note: document.getElementById("note").value.trim()
-  };
+document.querySelectorAll(".seg")
+  .forEach(btn =>
+    btn.addEventListener("click", () => {
+      state.txType = btn.dataset.type;
 
-  try {
-    const result = await mutate("addTransaction", transaction);
-    if (result.success === false) throw new Error(result.error || "Lỗi lưu");
+      document.querySelectorAll(".seg")
+        .forEach(x => x.classList.remove("active"));
 
-    msg.textContent = "Đã lưu giao dịch ✓";
-    document.getElementById("amount").value = "";
-    document.getElementById("description").value = "";
-    document.getElementById("note").value = "";
+      btn.classList.add("active");
 
-    await loadAll();
-    setTimeout(() => navigate("home"), 400);
-  } catch (err) {
-    console.error(err);
-    msg.textContent = "Không lưu được: " + err.message;
-  } finally {
-    saveBtn.disabled = false;
-    saveBtn.textContent = "Lưu giao dịch";
-  }
-});
+      hydrateSelects();
+    })
+  );
+
+document.querySelectorAll(".quick-amounts button")
+  .forEach(btn =>
+    btn.addEventListener("click", () => {
+      document.getElementById("amount").value =
+        btn.dataset.amount;
+    })
+  );
+
+document.getElementById("date").value =
+  new Date().toISOString().slice(0,10);
+
+document.getElementById("transactionForm")
+  .addEventListener("submit", async e => {
+    e.preventDefault();
+
+    const saveBtn = document.getElementById("saveBtn");
+    const msg = document.getElementById("formMessage");
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Đang lưu...";
+    msg.textContent = "";
+
+    const transaction = {
+      Date: document.getElementById("date").value,
+      Type: state.txType,
+      Amount: Number(document.getElementById("amount").value || 0),
+      Description: document.getElementById("description").value.trim(),
+      Merchant: "",
+      Category: document.getElementById("category").value,
+      Account: document.getElementById("account").value,
+      Owner: document.getElementById("owner").value,
+      "Fixed/Variable": document.getElementById("fixedVariable").value,
+      Source: "Manual",
+      Status: "Confirmed",
+      Note: document.getElementById("note").value.trim()
+    };
+
+    try {
+      const result = await mutate(
+        "addTransaction",
+        transaction
+      );
+
+      if (result.success === false) {
+        throw new Error(result.error || "Lỗi lưu");
+      }
+
+      msg.textContent = "Đã lưu giao dịch ✓";
+
+      document.getElementById("amount").value = "";
+      document.getElementById("description").value = "";
+      document.getElementById("note").value = "";
+
+      await loadAll();
+
+      setTimeout(() => navigate("home"), 400);
+
+    } catch (err) {
+      console.error(err);
+
+      msg.textContent =
+        "Không lưu được: " + err.message;
+
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Lưu giao dịch";
+    }
+  });
 
 loadAll();
