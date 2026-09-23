@@ -1,4 +1,3 @@
-
 const API_URL = "https://script.google.com/macros/s/AKfycbwPMh7Xmd-yXTsTF_U0CU9CTWx3L19nlLPWKTST3I6oWQbMwt3H1FwthpQ4J4Ujir7x/exec";
 
 const state = {
@@ -29,20 +28,35 @@ function sameMonth(dateValue, refDate) {
   return d && d.getMonth() === refDate.getMonth() && d.getFullYear() === refDate.getFullYear();
 }
 
-async function getAction(action) {
-  const res = await fetch(`${API_URL}?action=${encodeURIComponent(action)}`);
-  if (!res.ok) throw new Error("Không đọc được dữ liệu");
-  return res.json();
+function jsonp(params = {}) {
+  return new Promise((resolve, reject) => {
+    const callbackName = "__mapp_cb_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+    const script = document.createElement("script");
+    const query = new URLSearchParams({ ...params, callback: callbackName });
+    const timeout = setTimeout(() => { cleanup(); reject(new Error("API timeout")); }, 15000);
+
+    function cleanup() {
+      clearTimeout(timeout);
+      if (script.parentNode) script.parentNode.removeChild(script);
+      try { delete window[callbackName]; } catch (_) {}
+    }
+
+    window[callbackName] = data => { cleanup(); resolve(data); };
+    script.onerror = () => { cleanup(); reject(new Error("Không kết nối được Apps Script")); };
+    script.src = API_URL + "?" + query.toString();
+    document.body.appendChild(script);
+  });
 }
 
-async function postData(payload) {
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) throw new Error("Không lưu được dữ liệu");
-  return res.json();
+async function getAction(action) {
+  return jsonp({ action });
+}
+
+async function mutate(action, payload = {}) {
+  const params = { action };
+  if (action === "deleteTransaction") params.transactionId = payload.transactionId || "";
+  else params.payload = JSON.stringify(payload);
+  return jsonp(params);
 }
 
 async function loadAll() {
@@ -53,28 +67,36 @@ async function loadAll() {
       getAction("accounts"),
       getAction("recurring")
     ]);
+
     state.transactions = Array.isArray(transactions) ? transactions : [];
     state.categories = Array.isArray(categories) ? categories.filter(x => x.Active !== "No") : [];
     state.accounts = Array.isArray(accounts) ? accounts.filter(x => x.Active !== "No") : [];
     state.recurring = Array.isArray(recurring) ? recurring.filter(x => x.Active !== "No") : [];
+
     hydrateSelects();
     renderAll();
   } catch (err) {
     console.error(err);
-    document.getElementById("recentTransactions").innerHTML = `<div class="empty">Không tải được dữ liệu. Kiểm tra Apps Script API.</div>`;
+    document.getElementById("recentTransactions").innerHTML =
+      `<div class="empty">Không tải được dữ liệu. Hãy kiểm tra Apps Script.</div>`;
   }
 }
 
 function hydrateSelects() {
-  const catOptions = state.categories
-    .map(c => `<option value="${esc(c.Category)}">${esc(c.Icon || "")} ${esc(c.Category)}</option>`).join("");
-  document.getElementById("category").innerHTML = catOptions;
-  document.getElementById("filterCategory").innerHTML =
-    `<option value="">Tất cả nhóm</option>` + catOptions;
+  const typeCats = state.categories.filter(c => c.Type === state.txType);
+  document.getElementById("category").innerHTML = typeCats
+    .map(c => `<option value="${esc(c.Category)}">${esc(c.Icon || "")} ${esc(c.Category)}</option>`)
+    .join("");
 
-  const accountOptions = state.accounts
-    .map(a => `<option value="${esc(a["Account Name"])}">${esc(a["Account Name"])}</option>`).join("");
-  document.getElementById("account").innerHTML = accountOptions;
+  document.getElementById("filterCategory").innerHTML =
+    `<option value="">Tất cả nhóm</option>` +
+    state.categories.map(c =>
+      `<option value="${esc(c.Category)}">${esc(c.Icon || "")} ${esc(c.Category)}</option>`
+    ).join("");
+
+  document.getElementById("account").innerHTML = state.accounts
+    .map(a => `<option value="${esc(a["Account Name"])}">${esc(a["Account Name"])}</option>`)
+    .join("");
 }
 
 function getMonthTransactions() {
@@ -147,7 +169,6 @@ function renderTransactions() {
   const type = document.getElementById("filterType").value;
   const owner = document.getElementById("filterOwner").value;
   const category = document.getElementById("filterCategory").value;
-
   let txs = getMonthTransactions().filter(t =>
     (!type || t.Type === type) &&
     (!owner || t.Owner === owner) &&
@@ -166,8 +187,7 @@ function renderRecurring() {
         <div class="list-sub">${esc(r.Type)} · Ngày ${esc(r.Day_of_Month || "")} · ${esc(r.Amount_Mode || "")}</div>
       </div>
       <strong>${r.Amount ? money(r.Amount) : "Chưa nhập"}</strong>
-    </div>
-  `).join("") : `<div class="empty">Chưa có khoản định kỳ.</div>`;
+    </div>`).join("") : `<div class="empty">Chưa có khoản định kỳ.</div>`;
 }
 
 function renderSettings() {
@@ -210,6 +230,7 @@ document.getElementById("nextMonth").addEventListener("click", () => {
   renderAll();
 });
 document.getElementById("refreshBtn").addEventListener("click", loadAll);
+
 ["filterType","filterOwner","filterCategory"].forEach(id =>
   document.getElementById(id).addEventListener("change", renderTransactions)
 );
@@ -218,6 +239,7 @@ document.querySelectorAll(".seg").forEach(btn => btn.addEventListener("click", (
   state.txType = btn.dataset.type;
   document.querySelectorAll(".seg").forEach(x => x.classList.remove("active"));
   btn.classList.add("active");
+  hydrateSelects();
 }));
 
 document.querySelectorAll(".quick-amounts button").forEach(btn => btn.addEventListener("click", () => {
@@ -230,40 +252,40 @@ document.getElementById("transactionForm").addEventListener("submit", async e =>
   e.preventDefault();
   const saveBtn = document.getElementById("saveBtn");
   const msg = document.getElementById("formMessage");
+
   saveBtn.disabled = true;
   saveBtn.textContent = "Đang lưu...";
   msg.textContent = "";
 
-  const payload = {
-    action: "addTransaction",
-    transaction: {
-      Date: document.getElementById("date").value,
-      Type: state.txType,
-      Amount: Number(document.getElementById("amount").value || 0),
-      Description: document.getElementById("description").value.trim(),
-      Merchant: "",
-      Category: document.getElementById("category").value,
-      Account: document.getElementById("account").value,
-      Owner: document.getElementById("owner").value,
-      "Fixed/Variable": document.getElementById("fixedVariable").value,
-      Source: "Manual",
-      Status: "Confirmed",
-      Note: document.getElementById("note").value.trim()
-    }
+  const transaction = {
+    Date: document.getElementById("date").value,
+    Type: state.txType,
+    Amount: Number(document.getElementById("amount").value || 0),
+    Description: document.getElementById("description").value.trim(),
+    Merchant: "",
+    Category: document.getElementById("category").value,
+    Account: document.getElementById("account").value,
+    Owner: document.getElementById("owner").value,
+    "Fixed/Variable": document.getElementById("fixedVariable").value,
+    Source: "Manual",
+    Status: "Confirmed",
+    Note: document.getElementById("note").value.trim()
   };
 
   try {
-    const result = await postData(payload);
+    const result = await mutate("addTransaction", transaction);
     if (result.success === false) throw new Error(result.error || "Lỗi lưu");
+
     msg.textContent = "Đã lưu giao dịch ✓";
     document.getElementById("amount").value = "";
     document.getElementById("description").value = "";
     document.getElementById("note").value = "";
+
     await loadAll();
-    setTimeout(() => navigate("home"), 500);
+    setTimeout(() => navigate("home"), 400);
   } catch (err) {
     console.error(err);
-    msg.textContent = "Không lưu được. Nếu trình duyệt báo CORS, mình sẽ chuyển sang phương án proxy an toàn.";
+    msg.textContent = "Không lưu được: " + err.message;
   } finally {
     saveBtn.disabled = false;
     saveBtn.textContent = "Lưu giao dịch";
